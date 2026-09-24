@@ -1,59 +1,57 @@
 # 基于 Shell 与 APT 的大数据开发环境自动化部署工具
 
-新拿到一台 Ubuntu 服务器，通常要手动做一堆初始化：换镜像源、装 JDK 和 Python、配编辑器。步骤多、容易漏，每台机器做得还不太一样。
+给新服务器做初始化的几个脚本，Ubuntu 上用的。
 
-这个工具把这些步骤写成 Shell 脚本，跑一条命令全部做完，让每台机器的环境保持一致。
+以前每拿到一台新机器，都要手动来一遍：换镜像源、装 JDK 和 Python、配 VS Code。步骤就那几步，但每次顺序和细节都不太一样，隔一段时间自己都记不清上次是怎么配的。后来干脆写成脚本，跑一遍就完事，换机器的时候也不用再翻笔记。
 
-## 它做了哪三件事
+主脚本 `deploy.sh` 按顺序调三个子脚本：
 
-按顺序执行三个脚本：
+1. `env_scripts/mirrors_set.sh` —— 把软件源换成清华的。改 `/etc/apt/sources.list` 之前会先复制一份备份，万一手滑还能改回来。
+2. `env_scripts/version_lock.sh` —— 装 JDK 11 和 Python 3.10，装完用 `apt-mark hold` 把版本锁住，顺便把 pip 也换成清华源，不然装依赖太慢。
+3. `env_scripts/vscode_link.sh` —— 在当前项目目录下生成 `.vscode/settings.json`，写上 Python 解释器路径、保存时自动格式化这些配置。
 
-| 步骤 | 脚本 | 做什么 |
-|---|---|---|
-| 1 | `env_scripts/mirrors_set.sh` | 把系统软件源换成清华镜像（下载更快），换之前先备份原文件 |
-| 2 | `env_scripts/version_lock.sh` | 安装 JDK 11 和 Python 3.10，然后**锁住版本**不让系统自动升级；同时配好 pip 国内源 |
-| 3 | `env_scripts/vscode_link.sh` | 生成 `.vscode/settings.json`，指定 Python 路径、保存时自动格式化、绑定代码检查工具 |
+主脚本调每个子脚本之前会先看文件在不在，不在就报错退出，省得少做一步还傻傻往下跑。
 
-主脚本 `deploy.sh` 在调用每个子脚本前会先检查文件是否存在，缺文件就报错退出，不会少做一步还继续往下跑。
+## 关于锁版本
 
-## 为什么要锁版本
+这一步是我特意加的。JDK 和 Python 被系统自动升级到新版本之后，原来能跑的代码有时候就直接报错了，排查起来还挺费劲。`apt-mark hold` 是系统自带的锁版本命令，锁上以后自动升级会跳过它们，哪天想升级再手动解锁就行。
 
-JDK 和 Python 这类基础组件，如果被系统自动升级到新版本，项目里原本能跑的代码可能直接报错。`apt-mark hold` 是系统自带的"锁版本"命令，锁上之后自动升级会跳过它们，需要升级时手动解锁即可。
+## local 和 prod 两种模式
 
-## 两种运行模式
+`deploy.sh` 开头有个 `RUN_ENV`，控制脚本是真执行还是只打印：
 
-脚本里的 `RUN_ENV` 参数决定用哪种模式：
+- `local`（默认值）：不执行真实命令，只把"我打算做什么"打出来。我平时在 Windows 上就是这么验证脚本逻辑的，不可能为了改一行脚本专门开台服务器。
+- `prod`：真执行。要用 `sudo`，必须在真的 Ubuntu 机器上跑。
 
-- **local**（默认）：本地模拟模式。不执行真实命令，只打印"我打算做什么"，用来在 Windows 上验证脚本逻辑是否通顺
-- **prod**：真实执行。会用到 `sudo`，需要在真正的 Ubuntu 服务器上跑
+现在的流程是先在 local 下跑一遍看输出对不对，确认没问题再改成 prod 上服务器。
 
-## 使用方法
+## 怎么用
 
 ```bash
-# 1. 把脚本放到服务器上（或 git clone 下来）
-# 2. 按需修改 deploy.sh 里的 RUN_ENV
-#    RUN_ENV="local"   本地模拟，先看看会做什么
-#    RUN_ENV="prod"    真实执行
+git clone 下来，或者直接把文件夹拷到服务器上
 
+# 先看看会做什么
+vim deploy.sh          # 确认 RUN_ENV="local"
 bash deploy.sh
+
+# 没问题了再改成 prod 真跑
 ```
 
-先跑一次 local 模式确认输出符合预期，再改成 prod 在服务器上执行，是个比较稳妥的顺序。
-
-## 目录结构
+## 目录
 
 ```
-lightops-deployer/
-├── deploy.sh                    # 主脚本，按顺序调用下面三个
-└── env_scripts/
-    ├── mirrors_set.sh           # 换镜像源（先备份再改）
-    ├── version_lock.sh          # 装组件 + 锁版本 + 配 pip 源
-    └── vscode_link.sh           # 生成 VS Code 配置
+deploy.sh                    # 主脚本，按顺序调下面三个
+env_scripts/
+├── mirrors_set.sh           # 换镜像源
+├── version_lock.sh          # 装组件、锁版本、配 pip 源
+└── vscode_link.sh           # 生成 VS Code 配置
 ```
 
-## 注意事项
+## 几个没做好的地方
 
-- prod 模式需要 sudo 权限，会修改系统配置（sources.list、安装软件包）
-- 换源脚本按 `sed` 替换官方源地址，如果你的系统用的不是默认的 Ubuntu 源，替换可能不生效
-- 只针对 Ubuntu/Debian 系（用 apt），CentOS 等系统不适用
-- 脚本没有做"重复执行"的幂等处理，反复跑会重复安装和重复写入配置
+写的时候就图自己用着方便，有些地方没做扎实：
+
+- prod 模式必须有 sudo，而且是真的会动系统配置（装包、改 sources.list），不是随便能试的
+- 换源那步是用 `sed` 直接替换官方源地址，如果你的机器上本来就不是默认的 Ubuntu 源，替换可能没效果
+- 只支持 apt 系的系统，CentOS 之类的用不了
+- 没做重复执行的保护，反复跑会重复装包、重复写配置。正常也就新机器跑一次，所以一直没改
